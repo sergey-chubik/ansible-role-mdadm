@@ -1,0 +1,129 @@
+---
+
+#Checking for any existing raid arrays
+#                Проверка существующих массивов RAID
+- name: mdadm | Checking Status Of Array(s)
+  shell: "cat /proc/mdstat | grep {{ mdadm_arrays.name }}"
+  register: "array_check"
+  changed_when: false
+  failed_when: false
+  check_mode: no
+
+
+# Creating raid arrays
+# We pass yes in order to accept any questions prompted for yes|no
+#                Создание RAID массивов
+#                Мы передаем да, чтобы принять какие-либо вопросы, предложенные для да | нет
+- name: mdadm | Creating Array(s)
+  shell: "yes | mdadm --create /dev/{{ mdadm_arrays.name }} --level={{ mdadm_arrays.level }} --raid-devices={{ mdadm_arrays.devices|count }} {{ mdadm_arrays.devices| join (' ') }} --name={{ mdadm_arrays.name_v_mdadm }}"
+  register: "array_created"
+  when: >
+        mdadm_arrays.state|lower == "present" and
+        array_check.rc != 0
+
+# Capture the raid array details to append to mdadm.conf in order to persist between reboots
+#                Захватить детали массива RAID, чтобы добавить в MDADM.conf
+- name: mdadm | Capturing Array Details
+  command: "mdadm --detail --scan"
+  register: "array_details"
+  changed_when: false
+
+# Updating mdadm.conf in order to persist between reboots
+#                Создание mdadm.conf
+- name: mdadm | Updating {{ mdadm_conf }}
+  template:
+      src: mdadm.j2
+      dest: "{{ mdadm_conf }}"
+  when: array_created.changed
+
+# Updates initramfs archives in /boot
+#               Обновления initramfs архивы в / boot
+- name: mdadm | Updating Initramfs
+  command: "{{ update_initramfs }}"
+  when: array_created.changed
+
+# Creating raid arrays filesystem
+#               Создание файловой системы RAID
+- name: mdadm | Creating Array(s) Filesystem
+  filesystem:
+    fstype: "{{ mdadm_arrays.filesystem }}"
+    opts: "{{ mdadm_arrays.filesystem_opts | default(omit) }}"
+    dev: "/dev/{{ mdadm_arrays.name }}"
+  when: >
+        mdadm_arrays.state|lower == "present" and
+        mdadm_arrays.filesystem is defined
+
+# Mounting raid arrays
+#               Монтирование RAID
+- name: mdadm | Mounting Array(s)
+  mount:
+    name: "{{ mdadm_arrays.mountpoint }}"
+    src: "/dev/{{ mdadm_arrays.name }}"
+    fstype: "{{ mdadm_arrays.filesystem }}"
+    state: "mounted"
+    opts: "{{ mdadm_arrays.opts | default(omit) }}"
+    dump: "1"
+    passno: "2"
+  when: >
+        mdadm_arrays.state|lower == "present" and
+        mdadm_arrays.filesystem is defined and
+        mdadm_arrays.mountpoint is defined
+
+# Unmounting raid arrays in preparation of destroying
+#               Размонтиррование RAID при подготовке удаления
+- name: mdadm | Unmounting Array(s)
+  mount:
+    name: "{{ mdadm_arrays.mountpoint }}"
+    src: "/dev/{{ mdadm_arrays.name }}"
+    state: "absent"
+  when: >
+        mdadm_arrays.state|lower == "absent" and
+        mdadm_arrays.mountpoint is defined
+
+# Stopping raid arrays in preparation of destroying
+#               Остановка RAID в подготовке удаления
+- name: mdadm | Stopping Array(s)
+  command: "mdadm --stop /dev/{{ mdadm_arrays.name }}"
+  register: "array_stopped"
+  when: >
+        mdadm_arrays.state|lower == "absent" and
+        array_check.rc == 0
+
+# Zeroing out the disk devices which were part of the raid array
+#               Обнуление дисковых устройств, которые были частью массива RAID
+- name: mdadm | Zeroing Out Array Devices
+  command: "mdadm --zero-superblock {{ mdadm_arrays.devices[0] }}"
+  loop: "{{ mdadm_arrays.devices }}"
+  when: >
+        mdadm_arrays.state|lower == "absent" and
+        array_check.rc == 0 and
+        array_stopped.changed
+
+# Wiping out the disk devices which were part of the raid array
+#               Вытирая дисковые устройства, которые были частью массива RAID
+- name: mdadm | Wiping Out Array Devices
+  command: "wipefs -af {{ mdadm_arrays.devices[0] }}"
+  loop: "{{ mdadm_arrays.devices }}"
+  when: >
+        mdadm_arrays.state|lower == "absent" and
+        array_check.rc == 0 and
+        array_stopped.changed
+
+# Updating mdadm.conf in order to not persist between reboots
+#               Обновление mdadm.conf, чтобы не сохраняться между перезагрузкой
+- name: mdadm | Updating {{ mdadm_conf }} of destroying
+  lineinfile:
+    dest: "{{ mdadm_conf }}"
+    regexp: "^ARRAY /dev/{{ mdadm_arrays.name }}"
+    line: "ARRAY /dev/{{ mdadm_arrays.name }}"
+    state: "absent"
+  when: >
+        mdadm_arrays.state == "absent"
+
+# Updates initramfs archives in /boot
+#               Обновления initramfs архивы в / boot при удалении
+- name: mdadm | Updating Initramfs of destroying
+  command: "{{ update_initramfs }}"
+  when: >
+        array_stopped.changed and
+        mdadm_arrays.state == "absent"

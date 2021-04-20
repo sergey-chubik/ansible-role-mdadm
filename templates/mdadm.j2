@@ -1,0 +1,2 @@
+DEVICE {{mdadm_arrays.devices| join (' ') }}
+{{ array_details.stdout }} devices={{ mdadm_arrays.devices| join (',')}}
