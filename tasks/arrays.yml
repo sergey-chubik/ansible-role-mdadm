@@ -92,7 +92,7 @@
 # Zeroing out the disk devices which were part of the raid array
 #               Обнуление дисковых устройств, которые были частью массива RAID
 - name: mdadm | Zeroing Out Array Devices
-  command: "mdadm --zero-superblock {{ mdadm_arrays.devices[0] }}"
+  command: "mdadm --zero-superblock {{ item }}"
   loop: "{{ mdadm_arrays.devices }}"
   when: >
         mdadm_arrays.state|lower == "absent" and
@@ -102,7 +102,7 @@
 # Wiping out the disk devices which were part of the raid array
 #               Вытирая дисковые устройства, которые были частью массива RAID
 - name: mdadm | Wiping Out Array Devices
-  command: "wipefs -af {{ mdadm_arrays.devices[0] }}"
+  command: "wipefs -af {{ item }}"
   loop: "{{ mdadm_arrays.devices }}"
   when: >
         mdadm_arrays.state|lower == "absent" and
